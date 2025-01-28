@@ -1,0 +1,96 @@
+# This is an example .goreleaser.yml file with some sensible defaults.
+# Make sure to check the documentation at https://goreleaser.com
+
+# The lines below are called `modelines`. See `:help modeline`
+# Feel free to remove those if you don't want/need to use them.
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
+version: 2
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    # this name template makes the OS and Arch compatible with the results of `uname`.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  footer: >-
+
+    ## Installation
+
+    ```bash
+    helm plugin install https://github.com/tiulpin/kaartcontrole
+    ```
+
+    ## Usage
+
+    ```bash
+    # Basic usage
+    helm kc ./mychart values.yaml
+    ```
+
+    would give
+
+    ```text
+    Validating Helm chart values:
+    ==============================
+    Chart: ./mychart
+    Values file: values.yaml
+
+    Starting validation...
+
+    ❌ Unexpected key: 'maxReplicaCount' is not defined in chart defaults
+    ⚠️ Redundant value: 'resources.requests.cpu' matches default value: 100m
+    ❌ Type mismatch for 'resources.limits.cpu': expected string, got float64
+
+    Validation completed: Issues were found.
+    Error: plugin "kc" exited with error
+    ```
+
+    ... which has some issues! Let's remove `maxReplicaCount` and run the check again ignoring the fields we don't care much:
+
+    ```bash
+    # Ignore specific fields
+    helm kc --ignore resources --ignore health ./mychart values.yaml
+    ```
+
+    ```text
+    Validating Helm chart values:
+    ==============================
+    Chart: ./mychart
+    Values file: values.yaml
+    Ignoring fields: resources,health
+
+    Starting validation...
+
+
+    Validation completed: No issues found.
+    ```
+
+    ## Options
+
+    * `--ignore`: Fields to ignore in validation (can be specified multiple times)
+ 
