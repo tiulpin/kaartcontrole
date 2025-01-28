@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    commit-message:
+      prefix: ":arrow_up:"
+    schedule:
+      interval: weekly
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: /
+    commit-message:
+      prefix: ":arrow_up:"
+    schedule:
+      interval: weekly
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "*docker*"

@@ -1,0 +1,13 @@
+name: "kc"
+version: "0.1.0"
+usage: "KaartControle: validate Helm chart values against defaults"
+description: "A Helm plugin to detect redundant and mismatched values in your value files"
+command: "$HELM_PLUGIN_DIR/bin/kc"
+
+hooks:
+  install: |
+    cd $HELM_PLUGIN_DIR
+    make install
+  update: |
+    cd $HELM_PLUGIN_DIR
+    make install
