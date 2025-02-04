@@ -12,6 +12,7 @@ updates:
           - "*"
 
   - package-ecosystem: gomod
+    directory: /
     commit-message:
       prefix: ":arrow_up:"
     schedule:
