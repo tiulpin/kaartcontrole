@@ -2,6 +2,8 @@ package main
 
 import (
 	"os"
+	"path/filepath"
+	"sort"
 	"testing"
 
 	"helm.sh/helm/v3/pkg/cli/values"
@@ -145,5 +147,107 @@ nested:
 	}
 	if nested["key3"] != "value3" {
 		t.Errorf("expected nested.key3 to be 'value3', got %v", nested["key3"])
+	}
+}
+
+// TestDetectPairs verifies that detectPairs correctly finds valid pairs of values files.
+// For each service file (named "<chartName>.yaml"), detectPairs should locate the nearest
+// overrides.yaml (traversing upward until the base directory is reached).
+func TestDetectPairs(t *testing.T) {
+	// Create a temporary base directory to simulate the environment tree.
+	baseDir, err := os.MkdirTemp("", "detectpairs")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(baseDir)
+
+	chartName := "web_service"
+
+	// --- Pair 1 ---
+	// Create a directory "pair1" with an overrides.yaml and a service file.
+	pair1Dir := filepath.Join(baseDir, "pair1")
+	if err := os.MkdirAll(pair1Dir, 0755); err != nil {
+		t.Fatalf("failed to create pair1 dir: %v", err)
+	}
+	override1 := filepath.Join(pair1Dir, "overrides.yaml")
+	if err := os.WriteFile(override1, []byte("key: override1"), 0644); err != nil {
+		t.Fatalf("failed to write override1: %v", err)
+	}
+	pair1ServiceDir := filepath.Join(pair1Dir, "services")
+	if err := os.MkdirAll(pair1ServiceDir, 0755); err != nil {
+		t.Fatalf("failed to create pair1 service dir: %v", err)
+	}
+	service1 := filepath.Join(pair1ServiceDir, "web_service.yaml")
+	if err := os.WriteFile(service1, []byte("key: service1"), 0644); err != nil {
+		t.Fatalf("failed to write service1: %v", err)
+	}
+
+	// --- Pair 2 ---
+	// Create a directory "pair2/sub" with an overrides.yaml and a service file.
+	pair2Dir := filepath.Join(baseDir, "pair2", "sub")
+	if err := os.MkdirAll(pair2Dir, 0755); err != nil {
+		t.Fatalf("failed to create pair2 dir: %v", err)
+	}
+	override2 := filepath.Join(pair2Dir, "overrides.yaml")
+	if err := os.WriteFile(override2, []byte("key: override2"), 0644); err != nil {
+		t.Fatalf("failed to write override2: %v", err)
+	}
+	pair2ServiceDir := filepath.Join(pair2Dir, "services")
+	if err := os.MkdirAll(pair2ServiceDir, 0755); err != nil {
+		t.Fatalf("failed to create pair2 service dir: %v", err)
+	}
+	service2 := filepath.Join(pair2ServiceDir, "web_service.yaml")
+	if err := os.WriteFile(service2, []byte("key: service2"), 0644); err != nil {
+		t.Fatalf("failed to write service2: %v", err)
+	}
+
+	// --- No Pair ---
+	// Create a directory "nopair" with a service file but no overrides.yaml in its ancestry.
+	noPairDir := filepath.Join(baseDir, "nopair", "services")
+	if err := os.MkdirAll(noPairDir, 0755); err != nil {
+		t.Fatalf("failed to create nopair dir: %v", err)
+	}
+	noPairService := filepath.Join(noPairDir, "web_service.yaml")
+	if err := os.WriteFile(noPairService, []byte("key: nopair"), 0644); err != nil {
+		t.Fatalf("failed to write noPairService: %v", err)
+	}
+
+	// Also create a file with a different name that should be ignored.
+	ignoreFile := filepath.Join(pair1ServiceDir, "not_web_service.yaml")
+	if err := os.WriteFile(ignoreFile, []byte("key: ignore"), 0644); err != nil {
+		t.Fatalf("failed to write ignoreFile: %v", err)
+	}
+
+	// Call detectPairs using the temporary baseDir and the chart name.
+	pairs, err := detectPairs(baseDir, chartName)
+	if err != nil {
+		t.Fatalf("detectPairs returned error: %v", err)
+	}
+
+	// We expect exactly 2 pairs (from pair1 and pair2).
+	if len(pairs) != 2 {
+		t.Fatalf("expected 2 pairs, got %d", len(pairs))
+	}
+
+	// Sort the pairs by service path for predictable order.
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].service < pairs[j].service
+	})
+
+	expectedPairs := []struct {
+		override string
+		service  string
+	}{
+		{override: override1, service: service1},
+		{override: override2, service: service2},
+	}
+
+	for i, ep := range expectedPairs {
+		if pairs[i].override != ep.override {
+			t.Errorf("pair %d: expected override %q, got %q", i, ep.override, pairs[i].override)
+		}
+		if pairs[i].service != ep.service {
+			t.Errorf("pair %d: expected service %q, got %q", i, ep.service, pairs[i].service)
+		}
 	}
 }
