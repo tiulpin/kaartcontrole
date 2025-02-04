@@ -14,6 +14,7 @@ import (
 	"helm.sh/helm/v3/pkg/cli/values"
 )
 
+// IgnoreList holds fields to be ignored during validation.
 type IgnoreList []string
 
 func (i *IgnoreList) String() string {
@@ -22,6 +23,18 @@ func (i *IgnoreList) String() string {
 
 func (i *IgnoreList) Set(value string) error {
 	*i = append(*i, value)
+	return nil
+}
+
+// ValueFiles holds the list of values files passed via -f.
+type ValueFiles []string
+
+func (v *ValueFiles) String() string {
+	return strings.Join(*v, ",")
+}
+
+func (v *ValueFiles) Set(value string) error {
+	*v = append(*v, value)
 	return nil
 }
 
@@ -107,20 +120,22 @@ func findChart(chartPath string) (string, error) {
 
 func main() {
 	var ignoreList IgnoreList
+	var valuesFiles ValueFiles
+
 	flag.Var(&ignoreList, "ignore", "Fields to ignore in validation (can be specified multiple times)")
+	flag.Var(&valuesFiles, "f", "Values file (can be specified multiple times)")
 	flag.Parse()
 
 	args := flag.Args()
-	if len(args) < 2 {
-		fmt.Printf("Usage: helm kc [--ignore field1,field2,...] <chart> <values-file>\n")
-		fmt.Printf("\nExample:\n")
-		fmt.Printf("  helm kc --ignore resources ./mychart values.yaml\n")
-		fmt.Printf("  helm kc --ignore resources --ignore health ./mychart values.yaml\n")
+	if len(args) < 1 || len(valuesFiles) == 0 {
+		fmt.Printf("Usage: helm kc [--ignore field1,field2,...] <chart> -f <values-file> [-f <additional-values-file> ...]\n")
+		fmt.Printf("\nExamples:\n")
+		fmt.Printf("  helm kc ./mychart -f values.yaml\n")
+		fmt.Printf("  helm kc ./mychart -f overrides.yaml -f infra/web_service.yaml\n")
 		os.Exit(1)
 	}
 
 	chartPath := args[0]
-	valuesFile := args[1]
 
 	chartDir, err := findChart(chartPath)
 	if err != nil {
@@ -130,10 +145,6 @@ func main() {
 
 	if _, err := os.Stat(chartDir); os.IsNotExist(err) {
 		fmt.Printf("Chart directory does not exist: %s\n", chartDir)
-		os.Exit(1)
-	}
-	if _, err := os.Stat(valuesFile); os.IsNotExist(err) {
-		fmt.Printf("Values file does not exist: %s\n", valuesFile)
 		os.Exit(1)
 	}
 
@@ -151,7 +162,7 @@ func main() {
 	}
 
 	valueOpts := &values.Options{
-		ValueFiles: []string{valuesFile},
+		ValueFiles: valuesFiles,
 	}
 	providedValues, err := valueOpts.MergeValues(nil)
 	if err != nil {
@@ -163,7 +174,7 @@ func main() {
 	fmt.Printf("\nValidating Helm chart values:\n")
 	fmt.Printf("==============================\n")
 	fmt.Printf("Chart: %s\n", chartDir)
-	fmt.Printf("Values file: %s\n", valuesFile)
+	fmt.Printf("Values files: %s\n", valuesFiles.String())
 	if len(ignoreList) > 0 {
 		fmt.Printf("Ignoring fields: %s\n", ignoreList.String())
 	}
