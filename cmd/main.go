@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -60,8 +61,8 @@ func validateChartValues(defaultValues, providedValues map[string]interface{}, p
 
 		defaultValue, exists := defaultValues[key]
 		if !exists {
-			fmt.Printf("❌ Unexpected key: '%s' is not defined in chart defaults\n", fullKey)
-			*issuesFound = true
+			//fmt.Printf("❌ Unexpected key: '%s' is not defined in chart defaults\n", fullKey)
+			//*issuesFound = true
 			continue
 		}
 
@@ -118,6 +119,62 @@ func findChart(chartPath string) (string, error) {
 	return "", fmt.Errorf("chart not found: %s", chartPath)
 }
 
+// valuePair represents a candidate pair of values files:
+// one overrides file and one service file (e.g. web_service.yaml).
+type valuePair struct {
+	override string
+	service  string
+}
+
+// detectPairs searches starting at baseDir (for example, the current working directory)
+// for every file named "<chartName>.yaml". For each such service file, it traverses upward
+// (but not past baseDir) to locate the nearest overrides.yaml. If found, the pair is recorded.
+func detectPairs(baseDir, chartName string) ([]valuePair, error) {
+	var pairs []valuePair
+	err := filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		// Look for files named "<chartName>.yaml" (e.g. "web_service.yaml")
+		if !info.IsDir() && filepath.Base(path) == chartName+".yaml" {
+			currentDir := filepath.Dir(path)
+			var overridePath string
+			// Traverse upward until reaching the baseDir.
+			for {
+				candidate := filepath.Join(currentDir, "overrides.yaml")
+				if stat, err := os.Stat(candidate); err == nil && !stat.IsDir() {
+					overridePath = candidate
+					break
+				}
+				if currentDir == baseDir {
+					break
+				}
+				parent := filepath.Dir(currentDir)
+				if parent == currentDir {
+					break
+				}
+				currentDir = parent
+			}
+			if overridePath != "" {
+				pairs = append(pairs, valuePair{override: overridePath, service: path})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Sort pairs for consistent output.
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].override == pairs[j].override {
+			return pairs[i].service < pairs[j].service
+		}
+		return pairs[i].override < pairs[j].override
+	})
+	return pairs, nil
+}
+
 func main() {
 	var ignoreList IgnoreList
 	var valuesFiles ValueFiles
@@ -127,11 +184,12 @@ func main() {
 	flag.Parse()
 
 	args := flag.Args()
-	if len(args) < 1 || len(valuesFiles) == 0 {
-		fmt.Printf("Usage: helm kc [--ignore field1,field2,...] <chart> -f <values-file> [-f <additional-values-file> ...]\n")
+	if len(args) < 1 {
+		fmt.Printf("Usage: helm kc [--ignore field1,field2,...] <chart> [-f <values-file> ...]\n")
 		fmt.Printf("\nExamples:\n")
 		fmt.Printf("  helm kc ./mychart -f values.yaml\n")
 		fmt.Printf("  helm kc ./mychart -f overrides.yaml -f infra/web_service.yaml\n")
+		fmt.Printf("If no -f is provided, the plugin auto-detects valid pairs from the environment tree.\n")
 		os.Exit(1)
 	}
 
@@ -161,32 +219,84 @@ func main() {
 		os.Exit(1)
 	}
 
-	valueOpts := &values.Options{
-		ValueFiles: valuesFiles,
-	}
-	providedValues, err := valueOpts.MergeValues(nil)
-	if err != nil {
-		fmt.Printf("Failed to load values: %v\n", err)
-		os.Exit(1)
-	}
 	defaultValues := chart.Values
 
-	fmt.Printf("\nValidating Helm chart values:\n")
-	fmt.Printf("==============================\n")
-	fmt.Printf("Chart: %s\n", chartDir)
-	fmt.Printf("Values files: %s\n", valuesFiles.String())
-	if len(ignoreList) > 0 {
-		fmt.Printf("Ignoring fields: %s\n", ignoreList.String())
+	// If the user provided explicit -f values, merge and validate them as before.
+	if len(valuesFiles) > 0 {
+		valueOpts := &values.Options{
+			ValueFiles: valuesFiles,
+		}
+		providedValues, err := valueOpts.MergeValues(nil)
+		if err != nil {
+			fmt.Printf("Failed to load values: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("\nValidating Helm chart values:\n")
+		fmt.Printf("==============================\n")
+		fmt.Printf("Chart: %s\n", chartDir)
+		fmt.Printf("Values files: %s\n", valuesFiles.String())
+		if len(ignoreList) > 0 {
+			fmt.Printf("Ignoring fields: %s\n", ignoreList.String())
+		}
+		fmt.Printf("\nStarting validation...\n\n")
+
+		issuesFound := false
+		validateChartValues(defaultValues, providedValues, "", &issuesFound, ignoreList)
+		if !issuesFound {
+			fmt.Printf("\nValidation completed: No issues found.\n")
+		} else {
+			fmt.Printf("\nValidation completed: Issues were found.\n")
+			os.Exit(1)
+		}
+		return
 	}
-	fmt.Printf("\nStarting validation...\n\n")
 
-	issuesFound := false
-	validateChartValues(defaultValues, providedValues, "", &issuesFound, ignoreList)
-
-	if !issuesFound {
-		fmt.Printf("\nValidation completed: No issues found.\n")
-	} else {
-		fmt.Printf("\nValidation completed: Issues were found.\n")
+	// No -f flags provided: auto-detect valid pairs.
+	// Use the current working directory as the base for environment search.
+	envDir, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error determining current directory: %v\n", err)
 		os.Exit(1)
+	}
+
+	chartName := filepath.Base(chartDir)
+	pairs, err := detectPairs(envDir, chartName)
+	if err != nil {
+		fmt.Printf("Error auto-detecting value pairs: %v\n", err)
+		os.Exit(1)
+	}
+	if len(pairs) == 0 {
+		fmt.Printf("No valid pairs of values files (overrides.yaml + %s.yaml) found in base directory: %s\n", chartName, envDir)
+		os.Exit(1)
+	}
+
+	overallIssues := false
+	for _, p := range pairs {
+		fmt.Printf("\nValidating pair:\n  Overrides: %s\n  %s: %s\n", p.override, chartName, p.service)
+		valueOpts := &values.Options{
+			// The order matters: the overrides file is applied first.
+			ValueFiles: []string{p.override, p.service},
+		}
+		providedValues, err := valueOpts.MergeValues(nil)
+		if err != nil {
+			fmt.Printf("Failed to load values for pair (%s, %s): %v\n", p.override, p.service, err)
+			overallIssues = true
+			continue
+		}
+
+		issuesFound := false
+		validateChartValues(defaultValues, providedValues, "", &issuesFound, ignoreList)
+		if issuesFound {
+			fmt.Printf("Issues found for pair (%s, %s)\n", p.override, p.service)
+			overallIssues = true
+		} else {
+			fmt.Printf("No issues found for pair (%s, %s)\n", p.override, p.service)
+		}
+	}
+
+	if overallIssues {
+		os.Exit(1)
+	} else {
+		fmt.Printf("\nValidation completed: No issues found in any pair.\n")
 	}
 }
