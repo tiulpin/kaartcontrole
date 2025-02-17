@@ -4,7 +4,7 @@ go 1.23.0
 
 toolchain go1.23.5
 
-require helm.sh/helm/v3 v3.17.0
+require helm.sh/helm/v3 v3.17.1
 
 require (
 	dario.cat/mergo v1.0.1 // indirect
