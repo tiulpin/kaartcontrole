@@ -48,7 +48,7 @@ func shouldIgnore(path string, ignoreList IgnoreList) bool {
 	return false
 }
 
-func validateChartValues(defaultValues, providedValues map[string]interface{}, prefix string, issuesFound *bool, ignoreList IgnoreList) {
+func validateChartValues(defaultValues, providedValues, overridesValues map[string]interface{}, prefix string, issuesFound *bool, ignoreList IgnoreList) {
 	for key, providedValue := range providedValues {
 		fullKey := key
 		if prefix != "" {
@@ -68,7 +68,13 @@ func validateChartValues(defaultValues, providedValues map[string]interface{}, p
 
 		if defaultMap, isDefaultMap := defaultValue.(map[string]interface{}); isDefaultMap {
 			if providedMap, isProvidedMap := providedValue.(map[string]interface{}); isProvidedMap {
-				validateChartValues(defaultMap, providedMap, fullKey, issuesFound, ignoreList)
+				overridesMap := map[string]interface{}{}
+				if overridesValues != nil {
+					if overridesSubMap, ok := overridesValues[key].(map[string]interface{}); ok {
+						overridesMap = overridesSubMap
+					}
+				}
+				validateChartValues(defaultMap, providedMap, overridesMap, fullKey, issuesFound, ignoreList)
 			} else {
 				fmt.Printf("❌ Type mismatch for '%s': expected map, got %T\n", fullKey, providedValue)
 				*issuesFound = true
@@ -77,6 +83,12 @@ func validateChartValues(defaultValues, providedValues map[string]interface{}, p
 		}
 
 		if reflect.DeepEqual(defaultValue, providedValue) {
+			if overridesValues != nil {
+				overrideValue, overrideExists := overridesValues[key]
+				if overrideExists && !reflect.DeepEqual(overrideValue, providedValue) {
+					continue
+				}
+			}
 			fmt.Printf("⚠️  Redundant value: '%s' matches default value: %v\n", fullKey, providedValue)
 			*issuesFound = true
 			continue
@@ -223,6 +235,20 @@ func main() {
 
 	// If the user provided explicit -f values, merge and validate them as before.
 	if len(valuesFiles) > 0 {
+		// First, get the values from all but the last file
+		var overrideValues map[string]interface{}
+		if len(valuesFiles) > 1 {
+			overrideOpts := &values.Options{
+				ValueFiles: valuesFiles[:len(valuesFiles)-1],
+			}
+			overrideValues, err = overrideOpts.MergeValues(nil)
+			if err != nil {
+				fmt.Printf("Failed to load override values: %v\n", err)
+				os.Exit(1)
+			}
+		}
+
+		// Then get all merged values
 		valueOpts := &values.Options{
 			ValueFiles: valuesFiles,
 		}
@@ -231,6 +257,7 @@ func main() {
 			fmt.Printf("Failed to load values: %v\n", err)
 			os.Exit(1)
 		}
+
 		fmt.Printf("\nValidating Helm chart values:\n")
 		fmt.Printf("==============================\n")
 		fmt.Printf("Chart: %s\n", chartDir)
@@ -241,7 +268,7 @@ func main() {
 		fmt.Printf("\nStarting validation...\n\n")
 
 		issuesFound := false
-		validateChartValues(defaultValues, providedValues, "", &issuesFound, ignoreList)
+		validateChartValues(defaultValues, providedValues, overrideValues, "", &issuesFound, ignoreList)
 		if !issuesFound {
 			fmt.Printf("\nValidation completed: No issues found.\n")
 		} else {
@@ -272,19 +299,28 @@ func main() {
 
 	overallIssues := false
 	for _, p := range pairs {
+		overridesOpts := &values.Options{
+			ValueFiles: []string{p.override},
+		}
+		overridesValues, err := overridesOpts.MergeValues(nil)
+		if err != nil {
+			fmt.Printf("Failed to load overrides (%s): %v\n", p.override, err)
+
+			continue
+		}
+
+		// Then load all merged values
 		valueOpts := &values.Options{
-			// The order matters: the overrides file is applied first.
 			ValueFiles: []string{p.override, p.service},
 		}
 		providedValues, err := valueOpts.MergeValues(nil)
 		if err != nil {
 			fmt.Printf("Failed to load values (%s, %s): %v\n", p.override, p.service, err)
-			overallIssues = true
 			continue
 		}
 
 		issuesFound := false
-		validateChartValues(defaultValues, providedValues, "", &issuesFound, ignoreList)
+		validateChartValues(defaultValues, providedValues, overridesValues, "", &issuesFound, ignoreList)
 		if issuesFound {
 			fmt.Printf("Issues found for (%s, %s)\n", p.override, p.service)
 			overallIssues = true

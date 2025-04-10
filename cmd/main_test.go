@@ -74,7 +74,7 @@ func TestValidateChartValues(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var issuesFound bool
-			validateChartValues(tt.defaultValues, tt.providedValues, "", &issuesFound, tt.ignoreList)
+			validateChartValues(tt.defaultValues, tt.providedValues, nil, "", &issuesFound, tt.ignoreList)
 			if issuesFound != tt.wantIssues {
 				t.Errorf("validateChartValues() issuesFound = %v, want %v", issuesFound, tt.wantIssues)
 			}
@@ -249,5 +249,67 @@ func TestDetectPairs(t *testing.T) {
 		if pairs[i].service != ep.service {
 			t.Errorf("pair %d: expected service %q, got %q", i, ep.service, pairs[i].service)
 		}
+	}
+}
+
+func TestValidateChartValuesWithOverrides(t *testing.T) {
+	tests := []struct {
+		name           string
+		defaultValues  map[string]interface{}
+		overrideValues map[string]interface{}
+		providedValues map[string]interface{}
+		ignoreList     IgnoreList
+		wantIssues     bool
+	}{
+		{
+			name: "value overridden in overrides.yaml restored to default",
+			defaultValues: map[string]interface{}{
+				"tempo": map[string]interface{}{
+					"enabled": true,
+				},
+			},
+			overrideValues: map[string]interface{}{
+				"tempo": map[string]interface{}{
+					"enabled": false,
+				},
+			},
+			providedValues: map[string]interface{}{
+				"tempo": map[string]interface{}{
+					"enabled": true,
+				},
+			},
+			ignoreList: IgnoreList{},
+			wantIssues: false, // This should NOT be an issue
+		},
+		{
+			name: "redundant nested value",
+			defaultValues: map[string]interface{}{
+				"nested": map[string]interface{}{
+					"key": "value",
+				},
+			},
+			overrideValues: map[string]interface{}{
+				"nested": map[string]interface{}{
+					"other": "something",
+				},
+			},
+			providedValues: map[string]interface{}{
+				"nested": map[string]interface{}{
+					"key": "value", // This matches default and wasn't changed in overrides
+				},
+			},
+			ignoreList: IgnoreList{},
+			wantIssues: true, // This should be flagged
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var issuesFound bool
+			validateChartValues(tt.defaultValues, tt.providedValues, tt.overrideValues, "", &issuesFound, tt.ignoreList)
+			if issuesFound != tt.wantIssues {
+				t.Errorf("validateChartValues() issuesFound = %v, want %v", issuesFound, tt.wantIssues)
+			}
+		})
 	}
 }
