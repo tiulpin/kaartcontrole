@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"testing"
 
 	"helm.sh/helm/v3/pkg/cli/values"
@@ -162,12 +161,13 @@ nested:
 	}
 }
 
-// TestDetectPairs verifies that detectPairs correctly finds valid pairs of values files.
-// For each service file (named "<chartName>.yaml"), detectPairs should locate the nearest
-// overrides.yaml (traversing upward until the base directory is reached).
-func TestDetectPairs(t *testing.T) {
+// TestDetectValueSets verifies that detectValueSets correctly finds valid value sets.
+// For each service file (named "<chartName>.yaml"), detectValueSets should locate the nearest
+// overrides.yaml (traversing upward until the base directory is reached) and optionally
+// matching app-level files.
+func TestDetectValueSets(t *testing.T) {
 	// Create a temporary base directory to simulate the environment tree.
-	baseDir, err := os.MkdirTemp("", "detectpairs")
+	baseDir, err := os.MkdirTemp("", "detectvaluesets")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
@@ -179,91 +179,100 @@ func TestDetectPairs(t *testing.T) {
 
 	chartName := "web_service"
 
-	// --- Pair 1 ---
-	// Create a directory "pair1" with an overrides.yaml and a service file.
-	pair1Dir := filepath.Join(baseDir, "pair1")
-	if err := os.MkdirAll(pair1Dir, 0755); err != nil {
-		t.Fatalf("failed to create pair1 dir: %v", err)
+	// --- Set 1 with app-level file ---
+	// Create app-level file
+	appDir := filepath.Join(baseDir, "app")
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		t.Fatalf("failed to create app dir: %v", err)
 	}
-	override1 := filepath.Join(pair1Dir, "overrides.yaml")
+	appLevel1 := filepath.Join(appDir, "my-service.web_service.yaml")
+	if err := os.WriteFile(appLevel1, []byte("key: applevel"), 0644); err != nil {
+		t.Fatalf("failed to write app level file: %v", err)
+	}
+
+	// Create a directory "region1" with an overrides.yaml and a service file.
+	region1Dir := filepath.Join(baseDir, "region1")
+	if err := os.MkdirAll(region1Dir, 0755); err != nil {
+		t.Fatalf("failed to create region1 dir: %v", err)
+	}
+	override1 := filepath.Join(region1Dir, "overrides.yaml")
 	if err := os.WriteFile(override1, []byte("key: override1"), 0644); err != nil {
 		t.Fatalf("failed to write override1: %v", err)
 	}
-	pair1ServiceDir := filepath.Join(pair1Dir, "services")
-	if err := os.MkdirAll(pair1ServiceDir, 0755); err != nil {
-		t.Fatalf("failed to create pair1 service dir: %v", err)
+	region1ServiceDir := filepath.Join(region1Dir, "services", "my", "service")
+	if err := os.MkdirAll(region1ServiceDir, 0755); err != nil {
+		t.Fatalf("failed to create region1 service dir: %v", err)
 	}
-	service1 := filepath.Join(pair1ServiceDir, "web_service.yaml")
+	service1 := filepath.Join(region1ServiceDir, "web_service.yaml")
 	if err := os.WriteFile(service1, []byte("key: service1"), 0644); err != nil {
 		t.Fatalf("failed to write service1: %v", err)
 	}
 
-	// --- Pair 2 ---
-	// Create a directory "pair2/sub" with an overrides.yaml and a service file.
-	pair2Dir := filepath.Join(baseDir, "pair2", "sub")
-	if err := os.MkdirAll(pair2Dir, 0755); err != nil {
-		t.Fatalf("failed to create pair2 dir: %v", err)
+	// --- Set 2 without app-level file ---
+	// Create a directory "region2/sub" with an overrides.yaml and a service file.
+	region2Dir := filepath.Join(baseDir, "region2", "sub")
+	if err := os.MkdirAll(region2Dir, 0755); err != nil {
+		t.Fatalf("failed to create region2 dir: %v", err)
 	}
-	override2 := filepath.Join(pair2Dir, "overrides.yaml")
+	override2 := filepath.Join(region2Dir, "overrides.yaml")
 	if err := os.WriteFile(override2, []byte("key: override2"), 0644); err != nil {
 		t.Fatalf("failed to write override2: %v", err)
 	}
-	pair2ServiceDir := filepath.Join(pair2Dir, "services")
-	if err := os.MkdirAll(pair2ServiceDir, 0755); err != nil {
-		t.Fatalf("failed to create pair2 service dir: %v", err)
+	region2ServiceDir := filepath.Join(region2Dir, "services")
+	if err := os.MkdirAll(region2ServiceDir, 0755); err != nil {
+		t.Fatalf("failed to create region2 service dir: %v", err)
 	}
-	service2 := filepath.Join(pair2ServiceDir, "web_service.yaml")
+	service2 := filepath.Join(region2ServiceDir, "web_service.yaml")
 	if err := os.WriteFile(service2, []byte("key: service2"), 0644); err != nil {
 		t.Fatalf("failed to write service2: %v", err)
 	}
 
-	// --- No Pair ---
-	// Create a directory "nopair" with a service file but no overrides.yaml in its ancestry.
-	noPairDir := filepath.Join(baseDir, "nopair", "services")
-	if err := os.MkdirAll(noPairDir, 0755); err != nil {
-		t.Fatalf("failed to create nopair dir: %v", err)
+	// --- No Set ---
+	// Create a directory "noset" with a service file but no overrides.yaml in its ancestry.
+	noSetDir := filepath.Join(baseDir, "noset", "services")
+	if err := os.MkdirAll(noSetDir, 0755); err != nil {
+		t.Fatalf("failed to create noset dir: %v", err)
 	}
-	noPairService := filepath.Join(noPairDir, "web_service.yaml")
-	if err := os.WriteFile(noPairService, []byte("key: nopair"), 0644); err != nil {
-		t.Fatalf("failed to write noPairService: %v", err)
+	noSetService := filepath.Join(noSetDir, "web_service.yaml")
+	if err := os.WriteFile(noSetService, []byte("key: noset"), 0644); err != nil {
+		t.Fatalf("failed to write noSetService: %v", err)
 	}
 
 	// Also create a file with a different name that should be ignored.
-	ignoreFile := filepath.Join(pair1ServiceDir, "not_web_service.yaml")
+	ignoreFile := filepath.Join(region1ServiceDir, "not_web_service.yaml")
 	if err := os.WriteFile(ignoreFile, []byte("key: ignore"), 0644); err != nil {
 		t.Fatalf("failed to write ignoreFile: %v", err)
 	}
 
-	// Call detectPairs using the temporary baseDir and the chart name.
-	pairs, err := detectPairs(baseDir, chartName)
+	// Call detectValueSets using the temporary baseDir and the chart name.
+	sets, err := detectValueSets(baseDir, chartName)
 	if err != nil {
-		t.Fatalf("detectPairs returned error: %v", err)
+		t.Fatalf("detectValueSets returned error: %v", err)
 	}
 
-	// We expect exactly 2 pairs (from pair1 and pair2).
-	if len(pairs) != 2 {
-		t.Fatalf("expected 2 pairs, got %d", len(pairs))
+	// We expect exactly 2 sets (from region1 and region2).
+	if len(sets) != 2 {
+		t.Fatalf("expected 2 sets, got %d", len(sets))
 	}
 
-	// Sort the pairs by service path for predictable order.
-	sort.Slice(pairs, func(i, j int) bool {
-		return pairs[i].service < pairs[j].service
-	})
-
-	expectedPairs := []struct {
-		override string
-		service  string
-	}{
-		{override: override1, service: service1},
-		{override: override2, service: service2},
-	}
-
-	for i, ep := range expectedPairs {
-		if pairs[i].override != ep.override {
-			t.Errorf("pair %d: expected override %q, got %q", i, ep.override, pairs[i].override)
+	// Verify that set 1 has 3 files (app-level + override + service)
+	if len(sets[0].allFiles) != 3 {
+		t.Errorf("set 0: expected 3 files, got %d", len(sets[0].allFiles))
+	} else {
+		// Check that app-level file is included
+		if filepath.Base(sets[0].allFiles[0]) != "my-service.web_service.yaml" {
+			t.Errorf("set 0: expected first file to be app-level, got %s", sets[0].allFiles[0])
 		}
-		if pairs[i].service != ep.service {
-			t.Errorf("pair %d: expected service %q, got %q", i, ep.service, pairs[i].service)
+		if filepath.Base(sets[0].allFiles[1]) != "overrides.yaml" {
+			t.Errorf("set 0: expected second file to be overrides.yaml, got %s", sets[0].allFiles[1])
 		}
+		if filepath.Base(sets[0].allFiles[2]) != "web_service.yaml" {
+			t.Errorf("set 0: expected third file to be web_service.yaml, got %s", sets[0].allFiles[2])
+		}
+	}
+
+	// Verify that set 2 has 2 files (override + service, no app-level)
+	if len(sets[1].allFiles) != 2 {
+		t.Errorf("set 1: expected 2 files, got %d", len(sets[1].allFiles))
 	}
 }

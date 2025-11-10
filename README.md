@@ -16,12 +16,13 @@ helm plugin install https://github.com/tiulpin/kaartcontrole
 
 ## Usage
 
-```bash
-# Basic usage
-helm kc ./mychart values.yaml
-```
+### Basic usage with explicit values files
 
-would give
+```bash
+# Validate with explicit values files
+helm kc ./mychart -f values.yaml
+helm kc ./mychart -f overrides.yaml -f service.yaml
+```
 
 ```text
 Validating Helm chart values:
@@ -43,7 +44,7 @@ Error: plugin "kc" exited with error
 
 ```bash
 # Ignore specific fields
-helm kc --ignore resources --ignore health ./mychart values.yaml
+helm kc --ignore resources --ignore health ./mychart -f values.yaml
 ```
 
 ```text
@@ -62,3 +63,4 @@ Validation completed: No issues found.
 ## Options
 
 * `--ignore`: Fields to ignore in validation (can be specified multiple times)
+* `-f`: Explicitly specify values files to merge (can be specified multiple times). If not provided, auto-detection is used.

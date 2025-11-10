@@ -119,60 +119,114 @@ func findChart(chartPath string) (string, error) {
 	return "", fmt.Errorf("chart not found: %s", chartPath)
 }
 
-// valuePair represents a candidate pair of values files:
-// one overrides file and one service file (e.g. web_service.yaml).
-type valuePair struct {
-	override string
-	service  string
+// valueSet represents all values files that should be merged for a service deployment.
+// Files are merged in order, with later files overriding earlier ones.
+type valueSet struct {
+	allFiles []string // all files in merge order
 }
 
-// detectPairs searches starting at baseDir (for example, the current working directory)
-// for every file named "<chartName>.yaml". For each such service file, it traverses upward
-// (but not past baseDir) to locate the nearest overrides.yaml. If found, the pair is recorded.
-func detectPairs(baseDir, chartName string) ([]valuePair, error) {
-	var pairs []valuePair
+// detectValueSets searches for a generic hierarchical values structure.
+// For each service file (chartName.yaml), it looks for:
+// 1. Companion app-level files (*.chartName.yaml) in sibling directories
+// 2. overrides.yaml in parent directories
+// 3. The service file itself
+func detectValueSets(baseDir, chartName string) ([]valueSet, error) {
+	var sets []valueSet
+
+	// Find all service files and overrides files
+	serviceFiles := []string{}
+	overridesByDir := make(map[string]string)
+	appLevelFiles := make(map[string]string) // serviceName -> path
+
 	err := filepath.Walk(baseDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		// Look for files named "<chartName>.yaml" (e.g. "web_service.yaml")
-		if !info.IsDir() && filepath.Base(path) == chartName+".yaml" {
-			currentDir := filepath.Dir(path)
-			var overridePath string
-			// Traverse upward until reaching the baseDir.
-			for {
-				candidate := filepath.Join(currentDir, "overrides.yaml")
-				if stat, err := os.Stat(candidate); err == nil && !stat.IsDir() {
-					overridePath = candidate
-					break
-				}
-				if currentDir == baseDir {
-					break
-				}
-				parent := filepath.Dir(currentDir)
-				if parent == currentDir {
-					break
-				}
-				currentDir = parent
-			}
-			if overridePath != "" {
-				pairs = append(pairs, valuePair{override: overridePath, service: path})
-			}
+		if info.IsDir() {
+			return nil
 		}
+
+		baseName := filepath.Base(path)
+
+		// Collect overrides.yaml files
+		if baseName == "overrides.yaml" {
+			dir := filepath.Dir(path)
+			overridesByDir[dir] = path
+		}
+
+		// Collect *.chartName.yaml files (potential app-level configs)
+		if strings.HasSuffix(baseName, "."+chartName+".yaml") && baseName != chartName+".yaml" {
+			serviceName := strings.TrimSuffix(baseName, "."+chartName+".yaml")
+			appLevelFiles[serviceName] = path
+		}
+
+		if baseName == chartName+".yaml" {
+			serviceFiles = append(serviceFiles, path)
+		}
+
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Sort pairs for consistent output.
-	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].override == pairs[j].override {
-			return pairs[i].service < pairs[j].service
+	for _, servicePath := range serviceFiles {
+		relPath, _ := filepath.Rel(baseDir, servicePath)
+
+		var files []string
+
+		// Step 1: Find matching app-level file (if any)
+		// Try to infer service name from path structure
+		// e.g., services/app/api/web_service.yaml -> try "app-api"
+		// or llm/agg/all/web_service.yaml -> try various combinations
+		pathParts := strings.Split(filepath.Dir(relPath), string(filepath.Separator))
+
+		// Try different service name patterns
+		possibleNames := []string{}
+		if len(pathParts) >= 2 {
+			// Try: first-last (e.g., app-api from app/api)
+			possibleNames = append(possibleNames, pathParts[len(pathParts)-2]+"-"+pathParts[len(pathParts)-1])
 		}
-		return pairs[i].override < pairs[j].override
+		if len(pathParts) >= 3 {
+			// Try: first-last for deeper paths
+			possibleNames = append(possibleNames, pathParts[len(pathParts)-3]+"-"+pathParts[len(pathParts)-1])
+		}
+
+		for _, name := range possibleNames {
+			if appPath, exists := appLevelFiles[name]; exists {
+				files = append(files, appPath)
+				break
+			}
+		}
+
+		// Step 2: Find overrides.yaml by traversing upward from service file
+		currentDir := filepath.Dir(servicePath)
+		for {
+			if overridePath, exists := overridesByDir[currentDir]; exists {
+				files = append(files, overridePath)
+				break
+			}
+			parent := filepath.Dir(currentDir)
+			if parent == currentDir || parent == baseDir || !strings.HasPrefix(currentDir, baseDir) {
+				break
+			}
+			currentDir = parent
+		}
+
+		// Step 3: Add the service file itself
+		files = append(files, servicePath)
+
+		// Only create a set if we have at least overrides + service (minimum 2 files)
+		if len(files) >= 2 {
+			sets = append(sets, valueSet{allFiles: files})
+		}
+	}
+
+	sort.Slice(sets, func(i, j int) bool {
+		return sets[i].allFiles[len(sets[i].allFiles)-1] < sets[j].allFiles[len(sets[j].allFiles)-1]
 	})
-	return pairs, nil
+
+	return sets, nil
 }
 
 func main() {
@@ -251,7 +305,7 @@ func main() {
 		return
 	}
 
-	// No -f flags provided: auto-detect valid pairs.
+	// No -f flags provided: auto-detect value sets.
 	// Use the current working directory as the base for environment search.
 	envDir, err := os.Getwd()
 	if err != nil {
@@ -260,25 +314,50 @@ func main() {
 	}
 
 	chartName := filepath.Base(chartDir)
-	pairs, err := detectPairs(envDir, chartName)
+	sets, err := detectValueSets(envDir, chartName)
 	if err != nil {
 		fmt.Printf("Error auto-detecting values: %v\n", err)
 		os.Exit(1)
 	}
-	if len(pairs) == 0 {
-		fmt.Printf("No valid values files (overrides.yaml + %s.yaml) found in base directory: %s\n", chartName, envDir)
+	if len(sets) == 0 {
+		fmt.Printf("No valid value sets found for chart '%s' in directory: %s\n", chartName, envDir)
+		fmt.Printf("\nSearching for:\n")
+		fmt.Printf("  - Service files: %s.yaml\n", chartName)
+		fmt.Printf("  - Override files: overrides.yaml in parent directories\n")
+		fmt.Printf("  - App-level files: *.%s.yaml (optional, matched by service name)\n", chartName)
+		fmt.Printf("\nNote: Each service file must have at least one overrides.yaml in a parent directory.\n")
 		os.Exit(1)
 	}
 
+	fmt.Printf("\nValidating Helm chart values:\n")
+	fmt.Printf("==============================\n")
+	fmt.Printf("Chart: %s\n", chartDir)
+	fmt.Printf("Found %d value set(s) to validate\n", len(sets))
+	if len(ignoreList) > 0 {
+		fmt.Printf("Ignoring fields: %s\n", ignoreList.String())
+	}
+	fmt.Printf("\n")
+
 	overallIssues := false
-	for _, p := range pairs {
+	for i, set := range sets {
+		serviceFile := set.allFiles[len(set.allFiles)-1]
+		rel, _ := filepath.Rel(envDir, serviceFile)
+
+		fmt.Printf("[%d/%d] Validating: %s\n", i+1, len(sets), rel)
+		if len(set.allFiles) > 1 {
+			fmt.Printf("        Merging values from:\n")
+			for _, f := range set.allFiles {
+				relFile, _ := filepath.Rel(envDir, f)
+				fmt.Printf("          - %s\n", relFile)
+			}
+		}
+
 		valueOpts := &values.Options{
-			// The order matters: the overrides file is applied first.
-			ValueFiles: []string{p.override, p.service},
+			ValueFiles: set.allFiles,
 		}
 		providedValues, err := valueOpts.MergeValues(nil)
 		if err != nil {
-			fmt.Printf("Failed to load values (%s, %s): %v\n", p.override, p.service, err)
+			fmt.Printf("Failed to merge values: %v\n", err)
 			overallIssues = true
 			continue
 		}
@@ -286,12 +365,13 @@ func main() {
 		issuesFound := false
 		validateChartValues(defaultValues, providedValues, "", &issuesFound, ignoreList)
 		if issuesFound {
-			fmt.Printf("Issues found for (%s, %s)\n", p.override, p.service)
 			overallIssues = true
 		}
+		fmt.Printf("\n")
 	}
 
 	if overallIssues {
+		fmt.Printf("\nValidation completed: Issues were found.\n")
 		os.Exit(1)
 	} else {
 		fmt.Printf("\nValidation completed: No issues found.\n")
