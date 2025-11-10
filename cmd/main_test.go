@@ -91,14 +91,22 @@ func TestMergeValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	defer os.Remove(file1.Name())
+	defer func() {
+		if err := os.Remove(file1.Name()); err != nil {
+			t.Logf("failed to remove temp file: %v", err)
+		}
+	}()
 
 	// Create the second temporary values file.
 	file2, err := os.CreateTemp("", "values2-*.yaml")
 	if err != nil {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
-	defer os.Remove(file2.Name())
+	defer func() {
+		if err := os.Remove(file2.Name()); err != nil {
+			t.Logf("failed to remove temp file: %v", err)
+		}
+	}()
 
 	// Write YAML content into the first file.
 	content1 := `
@@ -109,7 +117,9 @@ nested:
 	if _, err := file1.WriteString(content1); err != nil {
 		t.Fatalf("failed to write to temp file: %v", err)
 	}
-	file1.Close()
+	if err := file1.Close(); err != nil {
+		t.Fatalf("failed to close temp file: %v", err)
+	}
 
 	// Write YAML content into the second file.
 	content2 := `
@@ -121,7 +131,9 @@ nested:
 	if _, err := file2.WriteString(content2); err != nil {
 		t.Fatalf("failed to write to temp file: %v", err)
 	}
-	file2.Close()
+	if err := file2.Close(); err != nil {
+		t.Fatalf("failed to close temp file: %v", err)
+	}
 
 	// Use Helm's values.Options to merge the two files.
 	valueOpts := &values.Options{
@@ -159,7 +171,11 @@ func TestDetectPairs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(baseDir)
+	defer func() {
+		if err := os.RemoveAll(baseDir); err != nil {
+			t.Logf("failed to remove temp dir: %v", err)
+		}
+	}()
 
 	chartName := "web_service"
 
