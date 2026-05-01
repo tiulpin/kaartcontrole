@@ -48,6 +48,44 @@ func shouldIgnore(path string, ignoreList IgnoreList) bool {
 	return false
 }
 
+// validateDictEnvMapValue catches a common YAML mistake: name/key indented at the same
+// level as secretKeyRef (or configMapKeyRef), so they become siblings of the ref instead
+// of nested inside it — secretKeyRef ends up null while name/key sit at the top level.
+func validateDictEnvMapValue(fullKey string, m map[string]interface{}, issuesFound *bool) {
+	validateRefIndent(fullKey, m, "secretKeyRef", issuesFound)
+	validateRefIndent(fullKey, m, "configMapKeyRef", issuesFound)
+}
+
+func validateRefIndent(fullKey string, m map[string]interface{}, ref string, issuesFound *bool) {
+	v, has := m[ref]
+	if !has {
+		return
+	}
+	empty := v == nil
+	if !empty {
+		inner, ok := v.(map[string]interface{})
+		if !ok {
+			return
+		}
+		empty = len(inner) == 0
+	}
+	if !empty {
+		return
+	}
+	for _, sib := range []string{"name", "key"} {
+		val, ok := m[sib]
+		if !ok || val == nil {
+			continue
+		}
+		if s, isStr := val.(string); isStr && s == "" {
+			continue
+		}
+		fmt.Printf("❌ Invalid '%s': %q must be nested under %s (check YAML indentation)\n", fullKey, sib, ref)
+		*issuesFound = true
+		return
+	}
+}
+
 func validateChartValues(defaultValues, providedValues map[string]interface{}, prefix string, issuesFound *bool, ignoreList IgnoreList) {
 	for key, providedValue := range providedValues {
 		fullKey := key
@@ -61,6 +99,11 @@ func validateChartValues(defaultValues, providedValues map[string]interface{}, p
 
 		defaultValue, exists := defaultValues[key]
 		if !exists {
+			if prefix == "dictEnv" {
+				if em, ok := providedValue.(map[string]interface{}); ok {
+					validateDictEnvMapValue(fullKey, em, issuesFound)
+				}
+			}
 			//fmt.Printf("❌ Unexpected key: '%s' is not defined in chart defaults\n", fullKey)
 			//*issuesFound = true
 			continue

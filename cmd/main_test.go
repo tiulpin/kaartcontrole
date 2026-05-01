@@ -68,6 +68,54 @@ func TestValidateChartValues(t *testing.T) {
 			ignoreList: IgnoreList{"resources"},
 			wantIssues: false,
 		},
+		{
+			name: "dictEnv secretKeyRef indent mistake",
+			defaultValues: map[string]interface{}{
+				"dictEnv": map[string]interface{}{},
+			},
+			providedValues: map[string]interface{}{
+				"dictEnv": map[string]interface{}{
+					"AUTHN_PUBLIC_SECRET": map[string]interface{}{
+						"secretKeyRef": nil,
+						"name":         "sid-embark",
+						"key":          "secret",
+					},
+				},
+			},
+			ignoreList: IgnoreList{},
+			wantIssues: true,
+		},
+		{
+			name: "dictEnv secretKeyRef ok",
+			defaultValues: map[string]interface{}{
+				"dictEnv": map[string]interface{}{},
+			},
+			providedValues: map[string]interface{}{
+				"dictEnv": map[string]interface{}{
+					"AUTHN_PUBLIC_SECRET": map[string]interface{}{
+						"secretKeyRef": map[string]interface{}{
+							"name": "sid-embark",
+							"key":  "secret",
+						},
+					},
+				},
+			},
+			ignoreList: IgnoreList{},
+			wantIssues: false,
+		},
+		{
+			name: "dictEnv scalar ok",
+			defaultValues: map[string]interface{}{
+				"dictEnv": map[string]interface{}{},
+			},
+			providedValues: map[string]interface{}{
+				"dictEnv": map[string]interface{}{
+					"FOO": "bar",
+				},
+			},
+			ignoreList: IgnoreList{},
+			wantIssues: false,
+		},
 	}
 
 	for _, tt := range tests {
